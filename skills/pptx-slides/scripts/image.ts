@@ -34,6 +34,7 @@ function readInputAsBuffer(source: string | Buffer): BufferSource {
       return { buffer: Buffer.from(source, 'utf8'), type: 'rawSvg' };
     }
     // Treat as filesystem path
+    if (source.includes('..') || path.isAbsolute(source)) throw new Error('Invalid file path');
     return { buffer: readFileSync(source), type: 'path' };
   }
   throw new Error('Unsupported image source type');
