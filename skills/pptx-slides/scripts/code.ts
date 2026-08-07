@@ -19,9 +19,10 @@ function loadPrismLanguage(lang: string = 'plaintext'): any {
   const id = map[normalized] || normalized;
   if (!Prism.languages[id]) {
     try {
-      require.resolve(`prismjs/components/prism-${id}`);
+      const componentId = id.replace(/[^a-z0-9-]/g, '');
+      require.resolve(`prismjs/components/prism-${componentId}`);
       // @ts-ignore
-      import(`prismjs/components/prism-${id}`);
+      import(`prismjs/components/prism-${componentId}`);
     } catch (_e) {
       // Language not found
     }
@@ -33,6 +34,9 @@ function buildThemeMap(themeCssModule: string = 'prismjs/themes/prism-okaidia.cs
   try {
     let cssPath: string;
     try {
+      if (themeCssModule.includes('..') || themeCssModule.startsWith('/') || /^[a-zA-Z]:/.test(themeCssModule) || themeCssModule.startsWith('\\\\')) {
+        throw new Error('Invalid module path');
+      }
       cssPath = require.resolve(themeCssModule);
     } catch {
       // For ESM, try to construct a path
