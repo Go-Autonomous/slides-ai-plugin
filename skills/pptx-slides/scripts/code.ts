@@ -1,65 +1,134 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 // @ts-ignore
 import Prism from 'prismjs';
 import type { CodeRun } from './types.js';
 
+const nodeRequire = createRequire(import.meta.url);
+const loadLanguages = nodeRequire('prismjs/components/') as (
+  languages: string[]
+) => void;
+
+const LANGUAGE_ALIASES: Record<string, string> = {
+  js: 'javascript',
+  ts: 'typescript',
+  py: 'python',
+  sh: 'bash',
+  yml: 'yaml',
+  html: 'markup',
+  xml: 'markup',
+};
+
+const LANGUAGE_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const THEME_MODULE_RE =
+  /^prismjs\/themes\/prism(?:-[a-z0-9-]+)?\.css$/;
+
+const FALLBACK_THEME: Record<string, string> = {
+  plain: 'FFFFFF',
+  comment: '999999',
+};
+
 let THEME_MAP: Record<string, string> | undefined;
 
-function loadPrismLanguage(lang: string = 'plaintext'): any {
-  const normalized = String(lang || 'plaintext').toLowerCase();
-  const map: Record<string, string> = {
-    js: 'javascript',
-    ts: 'typescript',
-    py: 'python',
-    sh: 'bash',
-    yml: 'yaml',
-    html: 'markup',
-    xml: 'markup',
-  };
-  const id = map[normalized] || normalized;
-  if (!Prism.languages[id]) {
-    try {
-      const componentId = id.replace(/[^a-z0-9-]/g, '');
-      require.resolve(`prismjs/components/prism-${componentId}`);
-      // @ts-ignore
-      import(`prismjs/components/prism-${componentId}`);
-    } catch (_e) {
-      // Language not found
-    }
-  }
-  return Prism.languages[id] || Prism.languages.plain || {};
+function getPrismLanguage(id: string): any | undefined {
+  return Object.prototype.hasOwnProperty.call(Prism.languages, id)
+    ? Prism.languages[id]
+    : undefined;
 }
 
-function buildThemeMap(themeCssModule: string = 'prismjs/themes/prism-okaidia.css'): Record<string, string> {
-  try {
-    let cssPath: string;
+function getPlainLanguage(): any {
+  return (
+    getPrismLanguage('plain') ||
+    getPrismLanguage('plaintext') ||
+    {}
+  );
+}
+
+function loadPrismLanguage(lang: string = 'plaintext'): any {
+  const normalized = String(lang || 'plaintext')
+    .trim()
+    .toLowerCase();
+
+  const id = LANGUAGE_ALIASES[normalized] || normalized;
+
+  if (!LANGUAGE_ID_RE.test(id)) {
+    return getPlainLanguage();
+  }
+
+  if (!getPrismLanguage(id)) {
     try {
-      if (themeCssModule.includes('..') || themeCssModule.startsWith('/') || /^[a-zA-Z]:/.test(themeCssModule) || themeCssModule.startsWith('\\\\')) {
-        throw new Error('Invalid module path');
-      }
-      cssPath = require.resolve(themeCssModule);
+      loadLanguages([id]);
     } catch {
-      // For ESM, try to construct a path
-      cssPath = themeCssModule;
+      // Unsupported language; fall back to plain text.
     }
-    const css = readFileSync(cssPath, 'utf8');
-    return Object.fromEntries(
-      [...css.matchAll(/\.token\.([\w-]+)[^{]*\{[^}]*color:\s*([^;\s]+)[^}]*\}/g)].map(
-        ([, t, c]: string[]) => [t, c.replace(/#|!important/g, '').trim()]
-      )
+  }
+
+  return getPrismLanguage(id) || getPlainLanguage();
+}
+
+function buildThemeMap(
+  themeCssModule: string = 'prismjs/themes/prism-okaidia.css'
+): Record<string, string> {
+  if (!THEME_MODULE_RE.test(themeCssModule)) {
+    return { ...FALLBACK_THEME };
+  }
+
+  try {
+    const cssPath = nodeRequire.resolve(themeCssModule);
+    const css = readFileSync(cssPath, 'utf8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      ''
     );
-  } catch (err) {
-    return { plain: 'FFFFFF', comment: '999999' };
+
+    const theme: Record<string, string> = {
+      ...FALLBACK_THEME,
+    };
+
+    for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selectors = match[1];
+      const declarations = match[2];
+
+      const colorMatch = declarations.match(
+        /(?:^|;)\s*color\s*:\s*([^;}]+)/i
+      );
+
+      if (!colorMatch) {
+        continue;
+      }
+
+      const color = colorMatch[1]
+        .replace(/\s*!important\s*$/i, '')
+        .trim()
+        .replace(/^#/, '');
+
+      if (!color) {
+        continue;
+      }
+
+      for (const tokenMatch of selectors.matchAll(
+        /\.token\.([\w-]+)/g
+      )) {
+        theme[tokenMatch[1]] = color;
+      }
+    }
+
+    return theme;
+  } catch {
+    return { ...FALLBACK_THEME };
   }
 }
 
 function getThemeMap(): Record<string, string> {
-  if (!THEME_MAP) THEME_MAP = buildThemeMap();
+  if (!THEME_MAP) {
+    THEME_MAP = buildThemeMap();
+  }
+
   return THEME_MAP;
 }
 
 function run(text: string, type: string = 'plain'): CodeRun {
   const theme = getThemeMap();
+
   return {
     text,
     options: {
@@ -70,24 +139,51 @@ function run(text: string, type: string = 'plain'): CodeRun {
   };
 }
 
-function tokensToRuns(tokens: any[]): CodeRun[] {
-  return tokens.flatMap((t) =>
-    typeof t === 'string'
-      ? [run(t)]
-      : Array.isArray(t.content)
-        ? tokensToRuns(t.content)
-        : [run(t.content, t.type)]
-  );
+function tokensToRuns(
+  tokens: any[],
+  inheritedType: string = 'plain'
+): CodeRun[] {
+  return tokens.flatMap((token) => {
+    if (typeof token === 'string') {
+      return [run(token, inheritedType)];
+    }
+
+    const type =
+      typeof token?.type === 'string'
+        ? token.type
+        : inheritedType;
+
+    if (Array.isArray(token?.content)) {
+      return tokensToRuns(token.content, type);
+    }
+
+    if (typeof token?.content === 'string') {
+      return [run(token.content, type)];
+    }
+
+    if (token?.content && typeof token.content === 'object') {
+      return tokensToRuns([token.content], type);
+    }
+
+    return [];
+  });
 }
 
-export function codeToRuns(code: string = '', lang: string = 'plaintext'): CodeRun[] {
+export function codeToRuns(
+  code: string = '',
+  lang: string = 'plaintext'
+): CodeRun[] {
   const grammar = loadPrismLanguage(lang);
   const lines = String(code || '').split('\n');
   const pad = lines.length.toString().length;
-  return lines.flatMap((line, i) => [
-    run(`${(i + 1).toString().padStart(pad, ' ')} `, 'comment'),
+
+  return lines.flatMap((line, index) => [
+    run(
+      `${(index + 1).toString().padStart(pad, ' ')} `,
+      'comment'
+    ),
     ...tokensToRuns(Prism.tokenize(line, grammar)),
-    ...(i < lines.length - 1 ? [run('\n')] : []),
+    ...(index < lines.length - 1 ? [run('\n')] : []),
   ]);
 }
 
