@@ -38,6 +38,9 @@ function buildThemeMap(themeCssModule: string = 'prismjs/themes/prism-okaidia.cs
         throw new Error('Invalid module path');
       }
       cssPath = require.resolve(themeCssModule);
+      if (cssPath.includes('..') || cssPath.startsWith('/') || /^[a-zA-Z]:/.test(cssPath) || cssPath.startsWith('\\\\')) {
+        throw new Error('Invalid module path');
+      }
     } catch {
       // For ESM, try to construct a path
       cssPath = themeCssModule;
