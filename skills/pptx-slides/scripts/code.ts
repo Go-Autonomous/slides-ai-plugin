@@ -30,18 +30,14 @@ function loadPrismLanguage(lang: string = 'plaintext'): any {
   return Prism.languages[id] || Prism.languages.plain || {};
 }
 
+const FALLBACK_THEME: Record<string, string> = { plain: 'FFFFFF', comment: '999999' };
+// Only bundled Prism themes are allowed; anything else never reaches the filesystem.
+const THEME_MODULE_RE = /^prismjs\/themes\/prism(?:-[a-z0-9-]+)?\.css$/;
+
 function buildThemeMap(themeCssModule: string = 'prismjs/themes/prism-okaidia.css'): Record<string, string> {
+  if (!THEME_MODULE_RE.test(themeCssModule)) return { ...FALLBACK_THEME };
   try {
-    let cssPath: string;
-    try {
-      if (themeCssModule.includes('..') || themeCssModule.startsWith('/') || /^[a-zA-Z]:/.test(themeCssModule) || themeCssModule.startsWith('\\\\')) {
-        throw new Error('Invalid module path');
-      }
-      cssPath = require.resolve(themeCssModule);
-    } catch {
-      // For ESM, try to construct a path
-      cssPath = themeCssModule;
-    }
+    const cssPath = require.resolve(themeCssModule);
     const css = readFileSync(cssPath, 'utf8');
     return Object.fromEntries(
       [...css.matchAll(/\.token\.([\w-]+)[^{]*\{[^}]*color:\s*([^;\s]+)[^}]*\}/g)].map(
@@ -49,7 +45,7 @@ function buildThemeMap(themeCssModule: string = 'prismjs/themes/prism-okaidia.cs
       )
     );
   } catch (err) {
-    return { plain: 'FFFFFF', comment: '999999' };
+    return { ...FALLBACK_THEME };
   }
 }
 
